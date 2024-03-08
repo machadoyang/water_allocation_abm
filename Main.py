@@ -6,10 +6,8 @@ This is a temporary script file.
 """
 
 from mesa import Agent, Model
-from mesa.time import RandomActivationByType, StagedActivation
 from mesa.space import NetworkGrid
 from mesa.datacollection import DataCollector
-from Scheduler import AgentTypeScheduler
 import DataPreparation
 
 import numpy as np
@@ -38,8 +36,7 @@ class FarmerAgent(Agent):
         self.type = 'farmer'
 
         """MNL parameters
-        Attention!
-        Change below values depending on the distribution for each parameter
+        Attention to distributions!
         """
         self.b_fruits = 0 # reference for dummy variable
         self.b_vegetables = np.random.normal(
@@ -66,14 +63,16 @@ class FarmerAgent(Agent):
             model.farmer_parameters.loc['b_water_price']['sd'])
         
         """Farmer init characteristics"""
-        self.irrigation_eff=0.9
+        self.irrigation_eff = np.random.choice([0.8, 0.9, 0.95], 1)[0]
 
         """Farmer parameters"""
         self.chosen_contract = None
-        self.amount_of_water_asked = ss.halfnorm.rvs()
+        self.farm_size = ss.halfnorm.rvs()
+        self.chosen_crop = None
+        self.amount_of_water_needed = 0
+        
         self.received_water_right = False
-        self.p_to_override = np.random.beta(a=2, b=5, size=1)[
-            0]  # Probability to override
+        self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         
         
         """Other parameters"""
@@ -125,9 +124,33 @@ class FarmerAgent(Agent):
         probabilities = calculate_probabilities(utilities)
         chosen_contract = decide_contract(probabilities, contract_options)
         self.chosen_contract = chosen_contract
+        
+    def choose_crop(self):
+        """
+        If farmer choose a contract, they plant whatever in the contract.
+        If they choose status quo, they plant based on market share
+        """
+        if (self.chosen_contract['crop'] == "no_binding"):
+            self.chosen_crop = "fruits"
+        else:
+            self.chosen_crop = self.chosen_contract['crop']
 
+    def calculate_water_to_withdraw(self):
+        # in m³/year
+        self.amount_of_water_needed = self.farm_size * model.crop_parameters[self.chosen_crop].loc['irrigation_volume'] * 100 / self.irrigation_eff
+        
+    def consider_go_rogue(self):
+        pass
+    
+    def ask_for_water(self):
+        pass
+    
     def step(self):
         self.choose_contract()
+        self.choose_crop()
+        self.calculate_water_to_withdraw()
+        if ((self.life_time == 0)): # farmer can go rogue before asking water to the manager
+            self.consider_go_rogue()
 
 
 class HumanSupplyAgent(Agent):
@@ -139,18 +162,17 @@ class HumanSupplyAgent(Agent):
         self.type = 'human_supply'
         
         """water right parameters"""
-        self.amount_of_water_asked = np.random.normal()
+        self.amount_of_water_needed = np.random.normal()
         self.received_water_right = False
-        self.p_to_override = np.random.beta(a=2, b=5, size=1)[
-            0]  # Probability to override
+        self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         
         """Other parameters"""
         self.life_time = 0
 
     def step(self):
-        print(self.received_water_right)
+        pass
         # print("Human supply user at in position {} withdrew {} m³/year".format(
-        #     self.pos, self.amount_of_water_asked))
+        #     self.pos, self.amount_of_water_needed))
 
 
 class IndustryAgent(Agent):
@@ -162,10 +184,9 @@ class IndustryAgent(Agent):
         self.type = 'industry'
         
         """water right parameters"""
-        self.amount_of_water_asked = np.random.normal()
+        self.amount_of_water_needed = np.random.normal()
         self.received_water_right = 0
-        self.p_to_override = np.random.beta(a=2, b=5, size=1)[
-            0]  # Probability to override
+        self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         
         """Other parameters"""
         self.life_time = 0
@@ -202,11 +223,11 @@ class ManagerAgent(Agent):
             if (agent.type == 'farmer' and agent.life_time == 0):
                 # get section information where farmer is positioned
                 farmer_section = model.G.nodes[agent.pos]["section"]
-                if (model.virtual_water_available_per_section[str(farmer_section)] >= agent.amount_of_water_asked):
+                if (model.virtual_water_available_per_section[str(farmer_section)] >= agent.amount_of_water_needed):
                     # Conceive water right and deduct from available water per section
-                    agent.amount_of_water_received = agent.amount_of_water_asked
+                    agent.amount_of_water_received = agent.amount_of_water_needed
                     model.virtual_water_available_per_section[str(
-                        farmer_section)] -= agent.amount_of_water_asked
+                        farmer_section)] -= agent.amount_of_water_needed
                     agent.received_water_right = True
                     if model.verbose == True:
                         print("Farmer n. " + str(agent.unique_id) + " received " +
@@ -243,7 +264,6 @@ class WaterAllocationModel(Model):
             farmer_parameters,
             crop_parameters):
         super().__init__()
-        # self.schedule = AgentTypeScheduler(WaterAllocationModel, [ManagerAgent, HumanSupplyAgent, IndustryAgent, FarmerAgent])
 
         # Set model parameters
         self.G = linear_graph
@@ -255,23 +275,24 @@ class WaterAllocationModel(Model):
         self.init_water_available_per_section = available_water_per_section.copy()
         self.virtual_water_available_per_section = init_water_available_per_section.copy()
         self.override_threshold = 0.3
+        self.crop_parameters = crop_parameters
         # self.init_water_available_per_section = self.allocate_all_water_to_section_one().copy()
         self.verbose = False
         self.time = 0
         
-        """Data collection"""
-        self.datacollector = DataCollector(
-            agent_reporters={
-                "Type":
-                    lambda x: x.type,
-                "Position":
-                    lambda x: x.pos if x.type == 'farmer' else None,
+        # """Data collection"""
+        # self.datacollector = DataCollector(
+        #     agent_reporters={
+        #         "Type":
+        #             lambda x: x.type,
+        #         "Position":
+        #             lambda x: x.pos if x.type == 'farmer' else None,
                 # "Planned crop area (ha)":
                 #     lambda x: x.area if x.type == 'farmer' else None,
                 # "Crop choice":
                 #     lambda x: x.cropChoice if x.type == 'farmer' else None,
                 # "Amount of water asked (m³/year)":
-                #     lambda x: x.amount_of_water_asked if x.type == 'farmer' else None,
+                #     lambda x: x.amount_of_water_needed if x.type == 'farmer' else None,
                 # "Amount of water received (m³/year)":
                 #     lambda x: x.amount_of_water_received if x.type == 'farmer' else None,
                 # "Received water right":
@@ -282,8 +303,8 @@ class WaterAllocationModel(Model):
                 #     lambda x: x.amount_of_water_withdrawn if x.type == 'farmer' else None,
                 # "Crop Choice":
                 #     lambda x: x.cropChoice if x.type == 'farmer' else None,
-            },
-        )
+        #     },
+        # )
         # self.datacollector.collect(self)
 
     def withdraw_water(self):
@@ -309,7 +330,7 @@ class WaterAllocationModel(Model):
                 if (agent.type != 'manager'):
                     # get section information where farmer is positioned
                     farmer_section = model.G.nodes[agent.pos]["section"]
-                    if (model.available_water_per_section[str(farmer_section)] >= agent.amount_of_water_asked):
+                    if (model.available_water_per_section[str(farmer_section)] >= agent.amount_of_water_needed):
                         if (agent.received_water_right == True):
                             agent.amount_of_water_withdrawn = agent.amount_of_water_received
                             model.available_water_per_section[str(
@@ -320,9 +341,9 @@ class WaterAllocationModel(Model):
                         else:
                             if (agent.p_to_override < model.override_threshold):
                                 agent.agent_performed_override = True
-                                agent.amount_of_water_withdrawn = agent.amount_of_water_asked
+                                agent.amount_of_water_withdrawn = agent.amount_of_water_needed
                                 model.available_water_per_section[str(
-                                    farmer_section)] -= agent.amount_of_water_asked  # AQUIIIIII!
+                                    farmer_section)] -= agent.amount_of_water_needed  # AQUIIIIII!
                                 if model.verbose == True:
                                     print("Agent {} have overriden manager's decision withdrawing {} m³/year.". format(
                                         agent.unique_id, agent.amount_of_water_withdrawn))
@@ -339,7 +360,6 @@ class WaterAllocationModel(Model):
     def create_manager(self):
         m = ManagerAgent(len(self.G.nodes())+1, self)
         self.agents.add(m)
-        # self.schedule.add(m)
 
     def create_farmers_random_position(self):
         """
@@ -353,7 +373,6 @@ class WaterAllocationModel(Model):
             if (len(self.grid.get_cell_list_contents(random_node)) == 0):
                 f = FarmerAgent(self)
                 self.agents.add(f)
-                # self.schedule.add(f)
                 self.grid.place_agent(f, random_node[0])
                 i += 1
 
@@ -372,7 +391,6 @@ class WaterAllocationModel(Model):
     def create_human_supply(self):
         h = HumanSupplyAgent(self)
         self.agents.add(h)
-        # self.schedule.add(h)
         self.grid.place_agent(h, 10)  # place human supply on position 10
 
     def reset_water_available_for_current_year(self):
@@ -399,12 +417,9 @@ class WaterAllocationModel(Model):
         self.agents.select(agent_type=ManagerAgent).do('step')
         self.withdraw_water()
         self.collect_agents_data()
-        
-        # self.datacollector.collect(self)
 
         # Advance time
         self.time += 1
-        # self.schedule.step()
 
     def run_model(self, step_count=3):
         for i in range(step_count):
@@ -440,7 +455,7 @@ available_water_per_section = {
 }
 
 mnl_parameters = pd.read_excel('mnl_farmer_parameters.xlsx', index_col=0)
-crop_parameters = pd.read_excel('crop_parameters.xlsx', index_col=0)
+crop_parameters = pd.read_csv('crop_parameters.csv', index_col=0)
 
 "Run model"
 number_of_steps = 3
