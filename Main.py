@@ -7,7 +7,6 @@ This is a temporary script file.
 
 from mesa import Agent, Model
 from mesa.space import NetworkGrid
-from mesa.datacollection import DataCollector
 import DataPreparation
 
 import numpy as np
@@ -73,6 +72,7 @@ class FarmerAgent(Agent):
         
         self.received_water_right = False
         self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
+        self.go_rogue = False
         
         
         """Other parameters"""
@@ -140,17 +140,28 @@ class FarmerAgent(Agent):
         self.amount_of_water_needed = self.farm_size * model.crop_parameters[self.chosen_crop].loc['irrigation_volume'] * 100 / self.irrigation_eff
         
     def consider_go_rogue(self):
-        pass
+        if (self.p_to_override < model.override_threshold):
+            self.go_rogue = True
     
     def ask_for_water(self):
         pass
     
-    def step(self):
+    def produce(self):
+        pass
+    
+    def step_stage_one(self):
         self.choose_contract()
         self.choose_crop()
         self.calculate_water_to_withdraw()
-        if ((self.life_time == 0)): # farmer can go rogue before asking water to the manager
+        if ((self.life_time == 0) and (self.chosen_crop == "no_binding")): # farmer can go rogue before asking water to the manager if they chose to not get a contract
             self.consider_go_rogue()
+            
+    def step_stage_two(self):
+        if ((self.life_time == 0) and (not self.received_water_right)): # farmer consider to go rogue again if water request is denied (regardless of contract)
+            self.consider_go_rogue()
+        self.produce()
+        # farmer produce for the year
+        pass
 
 
 class HumanSupplyAgent(Agent):
@@ -280,33 +291,6 @@ class WaterAllocationModel(Model):
         self.verbose = False
         self.time = 0
         
-        # """Data collection"""
-        # self.datacollector = DataCollector(
-        #     agent_reporters={
-        #         "Type":
-        #             lambda x: x.type,
-        #         "Position":
-        #             lambda x: x.pos if x.type == 'farmer' else None,
-                # "Planned crop area (ha)":
-                #     lambda x: x.area if x.type == 'farmer' else None,
-                # "Crop choice":
-                #     lambda x: x.cropChoice if x.type == 'farmer' else None,
-                # "Amount of water asked (m³/year)":
-                #     lambda x: x.amount_of_water_needed if x.type == 'farmer' else None,
-                # "Amount of water received (m³/year)":
-                #     lambda x: x.amount_of_water_received if x.type == 'farmer' else None,
-                # "Received water right":
-                #     lambda x: x.received_water_right if x.type == 'farmer' else None,
-                # "Total revenue (R$)":
-                #     lambda x: x.total_revenue if x.type == 'farmer' else None,
-                # "Amount of water withdrawn (m³/year)":
-                #     lambda x: x.amount_of_water_withdrawn if x.type == 'farmer' else None,
-                # "Crop Choice":
-                #     lambda x: x.cropChoice if x.type == 'farmer' else None,
-        #     },
-        # )
-        # self.datacollector.collect(self)
-
     def withdraw_water(self):
         """
         Withdraws water from the canal upstream to downstream.
@@ -410,12 +394,13 @@ class WaterAllocationModel(Model):
             self.create_human_supply()
         self.create_farmers_random_position()
 
-        # Run step
+        # Run steps
         """Agents perform their steps and request their water rights"""
-        self.agents.select(agent_type=FarmerAgent).do('step')
+        self.agents.select(agent_type=FarmerAgent).do('step_stage_one')
         self.agents.select(agent_type=HumanSupplyAgent).do('step')
         self.agents.select(agent_type=ManagerAgent).do('step')
         self.withdraw_water()
+        self.agents.select(agent_type=FarmerAgent).do('step_stage_two')
         self.collect_agents_data()
 
         # Advance time
@@ -469,5 +454,3 @@ model = WaterAllocationModel(
     crop_parameters  # data including irrigation volume and revenue
 )
 model.run_model(step_count=number_of_steps)
-
-agents_results = model.datacollector.get_agent_vars_dataframe()
