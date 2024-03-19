@@ -69,6 +69,7 @@ class FarmerAgent(Agent):
         self.farm_size = ss.halfnorm.rvs()
         self.chosen_crop = None
         self.amount_of_water_needed = 0
+        self.yearly_revenue = 0
         
         self.received_water_right = False
         self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
@@ -104,6 +105,7 @@ class FarmerAgent(Agent):
             return utilities
         
         def calculate_probabilities(utilities):
+            # Calculate probabilities based on multinomial logit model
             denominator = 0
             probabilities = []
             for utility in utilities:
@@ -127,7 +129,7 @@ class FarmerAgent(Agent):
         
     def choose_crop(self):
         """
-        If farmer choose a contract, they plant whatever in the contract.
+        If farmer choose a contract, they plant whatever is in the contract.
         If they choose status quo, they plant based on market share
         """
         if (self.chosen_contract['crop'] == "no_binding"):
@@ -147,7 +149,13 @@ class FarmerAgent(Agent):
         pass
     
     def produce(self):
-        pass
+        if (self.chosen_crop == "fruits"):
+            production_per_ha = 1
+        elif (self.chosen_crop == "vegetables"):
+            production_per_ha = 2
+        else: # it can only be maize_cassava_beans
+            production_per_ha = 3
+        self.yearly_revenue = self.farm_size * production_per_ha * model.crop_parameters.loc['revenue'][self.chosen_crop]
     
     def step_stage_one(self):
         self.choose_contract()
@@ -228,7 +236,7 @@ class ManagerAgent(Agent):
             print("Distributing water")
         agents_contents = self.model.grid.get_all_cell_contents()
         # sort agents by unique_id and their type
-        agent_type_order = {"human_supply": 1, "farmer":2, "industry":3}
+        agent_type_order = {"human_supply": 1, "industry":2, "farmer":3}
         agents_contents.sort(key=lambda x: (agent_type_order.get(x.type, float('inf')), x.unique_id))
         for agent in agents_contents:
             if (agent.type == 'farmer' and agent.life_time == 0):
@@ -257,6 +265,12 @@ class ManagerAgent(Agent):
             contract['tech_assistance'] = True
             if contract['crop'] == "fruits":
                 contract['water_price'] -= 0.05
+                
+    def change_water_price(self, price):
+        """Change contracts water price"""
+        for contract in self.contract_options:
+            contract['water_price'] = price
+        pass
     
     def step(self):
         # print("Hi, I am the manager n. {} and I am in position {}".format(
@@ -361,6 +375,9 @@ class WaterAllocationModel(Model):
                 i += 1
 
     def allocate_all_water_to_section_one(self):
+        """
+        This function is used by withdraw_water and compose logit for water balance
+        """
         init_water = self.init_water_available_per_section.copy()
         # sum total water available in m³/year
         total_water_available = sum(init_water.values())
