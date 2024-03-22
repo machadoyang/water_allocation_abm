@@ -145,9 +145,6 @@ class FarmerAgent(Agent):
         if (self.p_to_override < model.override_threshold):
             self.go_rogue = True
     
-    def ask_for_water(self):
-        pass
-    
     def produce(self):
         if (self.chosen_crop == "fruits"):
             production_per_ha = 1
@@ -169,7 +166,7 @@ class FarmerAgent(Agent):
             self.consider_go_rogue()
         self.produce()
         # farmer produce for the year
-        pass
+        self.life_time +=1
 
 
 class HumanSupplyAgent(Agent):
@@ -181,17 +178,26 @@ class HumanSupplyAgent(Agent):
         self.type = 'human_supply'
         
         """water right parameters"""
-        self.amount_of_water_needed = np.random.normal()
+        self.amount_of_water_needed = 0
         self.received_water_right = False
         self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         
         """Other parameters"""
         self.life_time = 0
+        
+    def calculate_water_to_withdraw(self):
+        self.amount_of_water_needed = ss.lognorm.rvs(
+            s=model.withdrawal_other_purposes_parameters.loc['human_supply']['shape'],
+            loc=model.withdrawal_other_purposes_parameters.loc['human_supply']['loc'],
+            scale=model.withdrawal_other_purposes_parameters.loc['human_supply']['scale']
+            )
 
     def step(self):
-        pass
-        # print("Human supply user at in position {} withdrew {} m³/year".format(
-        #     self.pos, self.amount_of_water_needed))
+        if (self.life_time == 0):
+            self.calculate_water_to_withdraw()
+        print("Human supply user at in position {} withdrew {} m³/year".format(
+            self.pos, self.amount_of_water_needed))
+        self.life_time +=1
 
 
 class IndustryAgent(Agent):
@@ -203,15 +209,24 @@ class IndustryAgent(Agent):
         self.type = 'industry'
         
         """water right parameters"""
-        self.amount_of_water_needed = np.random.normal()
+        self.amount_of_water_needed = 0
         self.received_water_right = 0
         self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         
         """Other parameters"""
         self.life_time = 0
+        
+    def calculate_water_to_withdraw(self):
+        self.amount_of_water_needed = ss.lognorm.rvs(
+            s=model.withdrawal_other_purposes_parameters.loc['industry']['shape'],
+            loc=model.withdrawal_other_purposes_parameters.loc['industry']['loc'],
+            scale=model.withdrawal_other_purposes_parameters.loc['industry']['scale']
+            )
 
     def step(self):
+        self.calculate_water_to_withdraw()
         print("I'm the industry")
+        self.life_time +=1
 
 
 class ManagerAgent(Agent):
@@ -287,7 +302,8 @@ class WaterAllocationModel(Model):
             init_water_available_per_section,
             n_farmers_to_create_per_year,
             farmer_parameters,
-            crop_parameters):
+            crop_parameters,
+            withdrawal_other_purposes_parameters):
         super().__init__()
 
         # Set model parameters
@@ -301,6 +317,7 @@ class WaterAllocationModel(Model):
         self.virtual_water_available_per_section = init_water_available_per_section.copy()
         self.override_threshold = 0.3
         self.crop_parameters = crop_parameters
+        self.withdrawal_other_purposes_parameters = withdrawal_other_purposes_parameters
         # self.init_water_available_per_section = self.allocate_all_water_to_section_one().copy()
         self.verbose = False
         self.time = 0
@@ -309,7 +326,6 @@ class WaterAllocationModel(Model):
         """
         Withdraws water from the canal upstream to downstream.
         """
-
         agents_contents = self.grid.get_all_cell_contents()
         grouped_agents = defaultdict(list)
         # Separate agents from each section to account for spatiallity
@@ -376,7 +392,7 @@ class WaterAllocationModel(Model):
 
     def allocate_all_water_to_section_one(self):
         """
-        This function is used by withdraw_water and compose logit for water balance
+        This function is used by withdraw_water and compose logic for water balance
         """
         init_water = self.init_water_available_per_section.copy()
         # sum total water available in m³/year
@@ -402,7 +418,9 @@ class WaterAllocationModel(Model):
         pass
 
     def step(self):
-        """ Execute the step of all agents, one at a time. At the end advance model by one step """
+        """
+        Execute the step of all agents, one at a time. At the end advance model by one step
+        """
         
         # Preparation
         if (self.time == 0):
@@ -457,6 +475,7 @@ available_water_per_section = {
 }
 
 mnl_parameters = pd.read_excel('mnl_farmer_parameters.xlsx', index_col=0)
+withdrawal_other_purposes_parameters = pd.read_excel('water_withdrawal_params.xlsx', index_col=0)
 crop_parameters = pd.read_csv('crop_parameters.csv', index_col=0)
 
 "Run model"
@@ -468,6 +487,7 @@ model = WaterAllocationModel(
     available_water_per_section,  # dictionary with available water for 15 sections
     n_farmers_to_create_per_year,  # fixed number of farmers created per year
     mnl_parameters,  # mean and sd for normal and lognormal parameters distributions
-    crop_parameters  # data including irrigation volume and revenue
+    crop_parameters,  # data including irrigation volume and revenue
+    withdrawal_other_purposes_parameters # log normal parameters for human supply and industrial uses
 )
 model.run_model(step_count=number_of_steps)
