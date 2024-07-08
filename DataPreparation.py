@@ -45,3 +45,10 @@ def generate_edges_linear_graph(number_of_sections = 10, number_of_nodes=25):
     nx.set_node_attributes(linear_graph, sections)
     nx.draw_networkx(linear_graph)
     return linear_graph
+
+def prepare_output_structure():
+    agents_df_columns = ["id", "step", "type", "position", "water_need", "water_withdrew", "contract", "revenue", "farm_area", "chosen_crop"]
+    model_df_columns = ["step", "section", "water_available", "virtual_water_available"]
+    agents_results = pd.DataFrame(columns= agents_df_columns)
+    model_results = pd.DataFrame(columns= model_df_columns)
+    return agents_results, model_results

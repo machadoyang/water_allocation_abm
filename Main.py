@@ -303,7 +303,9 @@ class WaterAllocationModel(Model):
             n_farmers_to_create_per_year,
             farmer_parameters,
             crop_parameters,
-            withdrawal_other_purposes_parameters):
+            withdrawal_other_purposes_parameters,
+            agents_output,
+            model_output):
         super().__init__()
 
         # Set model parameters
@@ -321,6 +323,10 @@ class WaterAllocationModel(Model):
         # self.init_water_available_per_section = self.allocate_all_water_to_section_one().copy()
         self.verbose = False
         self.time = 0
+        
+        # output
+        self.agents_output = agents_output
+        self.model_output = model_output
         
     def withdraw_water(self):
         """
@@ -413,9 +419,32 @@ class WaterAllocationModel(Model):
     def reset_water_available_for_current_year(self):
         self.available_water_per_section = self.allocate_all_water_to_section_one().copy()
         
-    def collect_agents_data(self):
-        # print(self.agents.select(lambda agent: agent.type == "farmer").get("atr_name))
-        pass
+    def collect_data(self):
+        new_farmers_data = pd.DataFrame({
+            "id": self.agents.select(lambda agent: agent.type == "farmer").get("unique_id"),
+            "step": self.time,
+            "type": self.agents.select(lambda agent: agent.type == "farmer").get("type"),
+            "position": self.agents.select(lambda agent: agent.type == "farmer").get("pos"),
+            "water_need": self.agents.select(lambda agent: agent.type == "farmer").get("amount_of_water_needed"),
+            "water_withdrew": np.nan,
+            "contract": self.agents.select(lambda agent: agent.type == "farmer").get("chosen_contract"),
+            "revenue": self.agents.select(lambda agent: agent.type == "farmer").get("yearly_revenue"),
+            "farm_area": self.agents.select(lambda agent: agent.type == "farmer").get("farm_size"),
+            "chosen_crop": self.agents.select(lambda agent: agent.type == "farmer").get("chosen_crop"),
+            
+            })
+        self.agents_output = pd.concat([self.agents_output, new_farmers_data], ignore_index=True)
+        
+        for section in self.virtual_water_available_per_section:
+            self.model_output = self.model_output.append(
+                {
+                    'step': model.time,
+                    'section': section,
+                    'water_available': self.available_water_per_section[section],
+                    'virtual_water_available': self.virtual_water_available_per_section[section],
+                },
+                ignore_index=True
+            )        
 
     def step(self):
         """
@@ -436,7 +465,7 @@ class WaterAllocationModel(Model):
         self.agents.select(agent_type=ManagerAgent).do('step')
         self.withdraw_water()
         self.agents.select(agent_type=FarmerAgent).do('step_stage_two')
-        self.collect_agents_data()
+        self.collect_data()
 
         # Advance time
         self.time += 1
@@ -474,6 +503,11 @@ available_water_per_section = {
     '15': 305.0*4320*water_restriction_coef,
 }
 
+"Create agents df"
+agents_output, model_output = DataPreparation.prepare_output_structure()
+
+"Read params"
+
 mnl_parameters = pd.read_excel('mnl_farmer_parameters.xlsx', index_col=0)
 withdrawal_other_purposes_parameters = pd.read_excel('water_withdrawal_params.xlsx', index_col=0)
 crop_parameters = pd.read_csv('crop_parameters.csv', index_col=0)
@@ -488,6 +522,8 @@ model = WaterAllocationModel(
     n_farmers_to_create_per_year,  # fixed number of farmers created per year
     mnl_parameters,  # mean and sd for normal and lognormal parameters distributions
     crop_parameters,  # data including irrigation volume and revenue
-    withdrawal_other_purposes_parameters # log normal parameters for human supply and industrial uses
+    withdrawal_other_purposes_parameters, # log normal parameters for human supply and industrial uses
+    agents_output, # empty df with agents output structure
+    model_output, # empty df with model output structure
 )
 model.run_model(step_count=number_of_steps)
