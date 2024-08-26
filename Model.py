@@ -16,6 +16,9 @@ import random
 
 from collections import defaultdict
 
+import warnings
+warnings.filterwarnings("ignore")
+
 # class WaterUser(Agent):
 #     _last_id = 0
 #     def __init__(self, model):
@@ -72,6 +75,7 @@ class FarmerAgent(Agent):
         self.yearly_revenue = 0
         
         self.received_water_right = False
+        self.amount_of_water_withdrawn = 0
         self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         self.go_rogue = False
         
@@ -133,13 +137,14 @@ class FarmerAgent(Agent):
         If they choose status quo, they plant based on market share
         """
         if (self.chosen_contract['crop'] == "no_binding"):
-            self.chosen_crop = "fruits"
+            self.chosen_crop = np.random.choice(
+                        crop_parameters.columns.values, 1, p=crop_parameters.loc['share'].values)[0]
         else:
             self.chosen_crop = self.chosen_contract['crop']
 
     def calculate_water_to_withdraw(self):
-        # in m³/year
-        self.amount_of_water_needed = self.farm_size * model.crop_parameters[self.chosen_crop].loc['irrigation_volume'] * 100 / self.irrigation_eff
+        nib = model.crop_parameters[self.chosen_crop].loc['irrigation_requirement'] * 100/self.irrigation_eff # in mm/year
+        self.amount_of_water_needed = 10 * nib * self.farm_size # in m³/year
         
     def consider_go_rogue(self):
         if (self.p_to_override < model.override_threshold):
@@ -180,6 +185,7 @@ class HumanSupplyAgent(Agent):
         """water right parameters"""
         self.amount_of_water_needed = 0
         self.received_water_right = False
+        self.amount_of_water_withdrawn = 0
         self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         
         """Other parameters"""
@@ -195,8 +201,8 @@ class HumanSupplyAgent(Agent):
     def step(self):
         if (self.life_time == 0):
             self.calculate_water_to_withdraw()
-        print("Human supply user at in position {} withdrew {} m³/year".format(
-            self.pos, self.amount_of_water_needed))
+        # print("Human supply user at in position {} withdrew {} m³/year".format(
+        #     self.pos, self.amount_of_water_needed))
         self.life_time +=1
 
 
@@ -210,7 +216,8 @@ class IndustryAgent(Agent):
         
         """water right parameters"""
         self.amount_of_water_needed = 0
-        self.received_water_right = 0
+        self.received_water_right = False
+        self.amount_of_water_withdrawn = 0
         self.p_to_override = np.random.beta(a=2, b=5, size=1)[0]  # Probability to override
         
         """Other parameters"""
@@ -311,11 +318,13 @@ class WaterAllocationModel(Model):
         # Set model parameters
         self.G = linear_graph
         self.grid = NetworkGrid(self.G)
-        self.number_of_farmers_to_create = n_farmers_to_create_per_year
+        self.number_of_farmers_to_create = n_water_users_per_year['farmer']
+        self.number_of_industry_to_create = n_water_users_per_year['industry']
+        self.number_of_human_supply_to_create = n_water_users_per_year['human_supply']
         self.farmer_parameters = farmer_parameters
         self.technical_assistance = False
-        self.available_water_per_section = available_water_per_section.copy()
-        self.init_water_available_per_section = available_water_per_section.copy()
+        self.available_water_per_section = init_water_available_per_section.copy()
+        self.init_water_available_per_section = init_water_available_per_section.copy()
         self.virtual_water_available_per_section = init_water_available_per_section.copy()
         self.override_threshold = 0.3
         self.crop_parameters = crop_parameters
@@ -376,6 +385,7 @@ class WaterAllocationModel(Model):
                     section)-len(current_list_of_sections)+1]
                 model.available_water_per_section[str(
                     next_section)] += model.available_water_per_section[str(section)]
+        print(model.available_water_per_section)
 
     def create_manager(self):
         m = ManagerAgent(len(self.G.nodes())+1, self)
@@ -388,14 +398,46 @@ class WaterAllocationModel(Model):
         i = 0
         while (i < self.number_of_farmers_to_create):
             # Returns a list with the random node
-            random_node = random.sample(list(linear_graph.nodes()), 1)
+            random_node = random.sample(list(self.G.nodes()), 1)
             # Check whether cell is empty. If so, place agent
             if (len(self.grid.get_cell_list_contents(random_node)) == 0):
                 f = FarmerAgent(self)
                 self.agents.add(f)
                 self.grid.place_agent(f, random_node[0])
                 i += 1
-
+                
+    def create_human_supply(self):
+        """
+        Create human supply users at random position in a linear graph.
+        """
+        i = 0
+        while (i < self.number_of_human_supply_to_create):
+            # Returns a list with the random node
+            random_node = random.sample(list(self.G.nodes()), 1)
+            # Check whether cell is empty. If so, place agent
+            if (len(self.grid.get_cell_list_contents(random_node)) == 0):
+                h = HumanSupplyAgent(self)
+                self.agents.add(h)
+                self.grid.place_agent(h, random_node[0])
+                i += 1
+            h = HumanSupplyAgent(self)
+        
+    def create_industry(self):
+        """
+        Create industrial users at random position in a linear graph.
+        """
+        i = 0
+        while (i < self.number_of_industry_to_create):
+            # Returns a list with the random node
+            random_node = random.sample(list(self.G.nodes()), 1)
+            # Check whether cell is empty. If so, place agent
+            if (len(self.grid.get_cell_list_contents(random_node)) == 0):
+                h = HumanSupplyAgent(self)
+                self.agents.add(h)
+                self.grid.place_agent(h, random_node[0])
+                i += 1
+            h = HumanSupplyAgent(self)
+    
     def allocate_all_water_to_section_one(self):
         """
         This function is used by withdraw_water and compose logic for water balance
@@ -411,22 +453,38 @@ class WaterAllocationModel(Model):
                 actual_water_available[i] = 0
         return actual_water_available
 
-    def create_human_supply(self):
-        h = HumanSupplyAgent(self)
-        self.agents.add(h)
-        self.grid.place_agent(h, 10)  # place human supply on position 10
-
     def reset_water_available_for_current_year(self):
         self.available_water_per_section = self.allocate_all_water_to_section_one().copy()
         
     def collect_data(self):
+        """
+        Populates agents_output and model_output with agents and models data,
+        respectively. Returns a dataframe with the following columns:
+        agents_output:
+            'id': Agent's id
+            'step': model current time step
+            'type': agent type. Can be: 'farmer', 'industry', 'human_supply'. 'manager' is not returned
+            'position': agent's node position
+            'water_need': water needed calculated depending on agent type
+            'water_withdrew': water withdrew depending on its availability
+            'contract': chosen contract in case agent is farmer
+            'revenue': revenue in case agent is farmer
+            'farm_area': farm area in case agent is farmer
+            'chosen_crop': chosen crop depending on contract in case agent is farmer
+        model_output:
+            'step':  model current time step
+            'section': water canal segment
+            'water_available': water available in corresponding section
+            'virtual_water_available': virtual water available in corresponding section
+        """
+        
         new_farmers_data = pd.DataFrame({
             "id": self.agents.select(lambda agent: agent.type == "farmer").get("unique_id"),
             "step": self.time,
             "type": self.agents.select(lambda agent: agent.type == "farmer").get("type"),
             "position": self.agents.select(lambda agent: agent.type == "farmer").get("pos"),
             "water_need": self.agents.select(lambda agent: agent.type == "farmer").get("amount_of_water_needed"),
-            "water_withdrew": np.nan,
+            "water_withdrew": self.agents.select(lambda agent: agent.type == "farmer").get("amount_of_water_withdrawn"),
             "contract": self.agents.select(lambda agent: agent.type == "farmer").get("chosen_contract"),
             "revenue": self.agents.select(lambda agent: agent.type == "farmer").get("yearly_revenue"),
             "farm_area": self.agents.select(lambda agent: agent.type == "farmer").get("farm_size"),
@@ -434,7 +492,21 @@ class WaterAllocationModel(Model):
             
             })
         self.agents_output = pd.concat([self.agents_output, new_farmers_data], ignore_index=True)
+        new_industrial_human_supply_data = pd.DataFrame({
+            "id": self.agents.select(lambda agent: agent.type == "industry" or agent.type == "human_supply").get("unique_id"),
+            "step": self.time,
+            "type": self.agents.select(lambda agent: agent.type == "industry" or agent.type == "human_supply").get("type"),
+            "position": self.agents.select(lambda agent: agent.type == "industry" or agent.type == "human_supply").get("pos"),
+            "water_need": self.agents.select(lambda agent: agent.type == "industry" or agent.type == "human_supply").get("amount_of_water_needed"),
+            "water_withdrew": self.agents.select(lambda agent: agent.type == "industry" or agent.type == "human_supply").get("amount_of_water_withdrawn"),
+            "contract": np.nan,
+            "revenue": np.nan,
+            "farm_area": np.nan,
+            "chosen_crop": np.nan,
+            })
+        self.agents_output = pd.concat([self.agents_output, new_industrial_human_supply_data], ignore_index=True)
         
+        # OLHAR AQUI!
         for section in self.virtual_water_available_per_section:
             self.model_output = self.model_output.append(
                 {
@@ -452,10 +524,12 @@ class WaterAllocationModel(Model):
         """
         
         # Preparation
+        self.reset_water_available_for_current_year()
         if (self.time == 0):
             self.create_manager()
             """Manager define the water policy"""
-            self.create_human_supply()
+        self.create_human_supply()
+        self.create_industry()
         self.create_farmers_random_position()
 
         # Run steps
@@ -480,50 +554,74 @@ class WaterAllocationModel(Model):
 
 "Generate Linear Graph with NX"
 linear_graph = DataPreparation.generate_edges_linear_graph(
-    number_of_sections=15, number_of_nodes=20)
+    number_of_sections=15, number_of_nodes=500)
 
 "Initial conditions"
-# Values in m³/year
+# # Values in m³/year
 water_restriction_coef = 1
+# available_water_per_section = {
+#     '1': 764.5*4320*water_restriction_coef,
+#     '2': 808.1*4320*water_restriction_coef,
+#     '3': 752.4*4320*water_restriction_coef,
+#     '4': 825.1*4320*water_restriction_coef,
+#     '5': 784.2*4320*water_restriction_coef,
+#     '6': 680.0*4320*water_restriction_coef,
+#     '7': 646.7*4320*water_restriction_coef,
+#     '8': 569.9*4320*water_restriction_coef,
+#     '9': 518.3*4320*water_restriction_coef,
+#     '10': 435.9*4320*water_restriction_coef,
+#     '11': 377.8*4320*water_restriction_coef,
+#     '12': 344.2*4320*water_restriction_coef,
+#     '13': 265.9*4320*water_restriction_coef,
+#     '14': 261.8*4320*water_restriction_coef,
+#     '15': 305.0*4320*water_restriction_coef,
+# }
+
 available_water_per_section = {
-    '1': 764.5*4320*water_restriction_coef,
-    '2': 808.1*4320*water_restriction_coef,
-    '3': 752.4*4320*water_restriction_coef,
-    '4': 825.1*4320*water_restriction_coef,
-    '5': 784.2*4320*water_restriction_coef,
-    '6': 680.0*4320*water_restriction_coef,
-    '7': 646.7*4320*water_restriction_coef,
-    '8': 569.9*4320*water_restriction_coef,
-    '9': 518.3*4320*water_restriction_coef,
-    '10': 435.9*4320*water_restriction_coef,
-    '11': 377.8*4320*water_restriction_coef,
-    '12': 344.2*4320*water_restriction_coef,
-    '13': 265.9*4320*water_restriction_coef,
-    '14': 261.8*4320*water_restriction_coef,
-    '15': 305.0*4320*water_restriction_coef,
+    '1': 1000*water_restriction_coef,
+    '2': 1000*water_restriction_coef,
+    '3': 1000*water_restriction_coef,
+    '4': 1000*water_restriction_coef,
+    '5': 1000*water_restriction_coef,
+    '6': 1000*water_restriction_coef,
+    '7': 1000*water_restriction_coef,
+    '8': 1000*water_restriction_coef,
+    '9': 1000*water_restriction_coef,
+    '10': 1000*water_restriction_coef,
+    '11': 1000*water_restriction_coef,
+    '12': 1000*water_restriction_coef,
+    '13': 1000*water_restriction_coef,
+    '14': 1000*water_restriction_coef,
+    '15': 1000*water_restriction_coef,
 }
 
 "Create agents df"
-agents_output, model_output = DataPreparation.prepare_output_structure()
+agents_output_layout, model_output_layout = DataPreparation.prepare_output_structure()
 
 "Read params"
 
 mnl_parameters = pd.read_excel('mnl_farmer_parameters.xlsx', index_col=0)
 withdrawal_other_purposes_parameters = pd.read_excel('water_withdrawal_params.xlsx', index_col=0)
-crop_parameters = pd.read_csv('crop_parameters.csv', index_col=0)
+crop_parameters = pd.read_excel('crop_parameters.xlsx', index_col=0)
 
 "Run model"
 number_of_steps = 3
-n_farmers_to_create_per_year = 2
+number_of_runs = 1
+n_water_users_per_year = {'farmer': 20, 'human_supply': 2, 'industry': 2}
+agents_output = []
+model_output = []
 
-model = WaterAllocationModel(
-    linear_graph,  # linear graph created using nx
-    available_water_per_section,  # dictionary with available water for 15 sections
-    n_farmers_to_create_per_year,  # fixed number of farmers created per year
-    mnl_parameters,  # mean and sd for normal and lognormal parameters distributions
-    crop_parameters,  # data including irrigation volume and revenue
-    withdrawal_other_purposes_parameters, # log normal parameters for human supply and industrial uses
-    agents_output, # empty df with agents output structure
-    model_output, # empty df with model output structure
-)
-model.run_model(step_count=number_of_steps)
+for i in range(4):
+    model = WaterAllocationModel(
+        linear_graph,  # linear graph created using nx
+        available_water_per_section,  # dictionary with available water for 15 sections
+        n_water_users_per_year,  # fixed number of farmers created per year
+        mnl_parameters,  # mean and sd for normal and lognormal parameters distributions
+        crop_parameters,  # data including irrigation volume and revenue
+        withdrawal_other_purposes_parameters, # log normal parameters for human supply and industrial uses
+        agents_output_layout, # empty df with agents output structure
+        model_output_layout, # empty df with model output structure
+    )
+    model.run_model(step_count=number_of_steps)
+    agents_output.append(model.agents_output)
+    model_output.append(model.model_output)

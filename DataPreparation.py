@@ -43,7 +43,7 @@ def generate_edges_linear_graph(number_of_sections = 10, number_of_nodes=25):
     linear_graph = nx.Graph()
     linear_graph.add_edges_from(edges)
     nx.set_node_attributes(linear_graph, sections)
-    nx.draw_networkx(linear_graph)
+    # nx.draw_networkx(linear_graph)
     return linear_graph
 
 def prepare_output_structure():
